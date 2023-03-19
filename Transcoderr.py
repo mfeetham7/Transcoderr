@@ -231,41 +231,67 @@ if __name__ == '__main__':
         files = []
         traversed_files = set()
         transcode_queue = set()
+
+        # Check if the transcode_queue.json file exists
         if os.path.exists("transcode_queue.json"):
+
+            # Load the data from the JSON file
             with open("transcode_queue.json", "r") as file:
                 data = json.load(file)
                 transcode_queue = set(data["transcode_queue"])
-                traversed_files = set(data["traversed_files"])
+                if traversed_files:
+                    traversed_files = set(data["traversed_files"])
+
+                # Check if there are files in the transcode queue
                 if transcode_queue:
+
+                    # Print the files in the transcode queue
                     print("Found files in transcode queue:")
                     for path in transcode_queue:
                         bitrate = get_bitrate(path, args.mediainfo_exe)
                         print(f"{path} ({bitrate/1000000:.2f} Mbps)")
-                    print("Do you want to transcode these files now? (yes/no)")
+
+                    # Prompt user to transcode files in the queue
+                    print("Do you want to transcode these files now? (yes/no/q)")
                     confirm = input().lower()
-                    if confirm == "yes":
+
+                    # If the user confirms, process the transcode queue and transcode the files
+                    if confirm == "yes" or confirm == "y":
                         files = [(path, get_bitrate(path, args.mediainfo_exe)) for path in transcode_queue]
                         process_transcode_queue(files)
                         for file, _ in files:
                             transcode(file, args.export_path, args.handbrake_exe, target_bitrate=args.target_bitrate)
+
+                        # Print the completion message and remove the transcode_queue.json file
                         print("Transcoding done.")
                         os.remove("transcode_queue.json")
+                    elif confirm == "q" or confirm == "quit":
+                        sys.exit(0)
+
+                    # If the user does not confirm, traverse the import path and process the transcode queue
                     else:
                         for file in traverse(args.import_path, args.filter_bitrate, args.target_bitrate, args.export_path, args.handbrake_exe, args.mediainfo_exe, args.subfolder_regex):
                             files.append(file)
                         process_transcode_queue(files)
+
+                # If there are no files in the transcode queue, restore the list of traversed files and process the transcode queue
                 else:
                     print("Restoring list of traversed files...")
                     for file in traverse(args.import_path, args.filter_bitrate, args.target_bitrate, args.export_path, args.handbrake_exe, args.mediainfo_exe, args.subfolder_regex):
                         files.append(file)
                     process_transcode_queue(files)
+
+        # If the transcode_queue.json file does not exist, traverse the import path and process the transcode queue
         else:
             for file in traverse(args.import_path, args.filter_bitrate, args.target_bitrate, args.export_path, args.handbrake_exe, args.mediainfo_exe, args.subfolder_regex):
                 files.append(file)
             process_transcode_queue(files)
 
+        # Use the configuration data from the config.ini file
         with open('config.ini', 'w') as f:
             config.write(f)
+            
+    #Handle KeyboardInterrupt to gracefully exit the script
     except KeyboardInterrupt:
         handle_keyboard_interrupt()
 
