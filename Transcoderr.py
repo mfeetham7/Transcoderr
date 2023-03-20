@@ -12,7 +12,7 @@ default_handbrake_exe = 'HandBrakeCLI.exe' if os_type == 'Windows' else 'HandBra
 default_mediainfo_exe = 'mediainfo'
 config = configparser.ConfigParser()
 config.read('config.ini')
-traversed_files = set()
+traversed_directories = set()
 transcode_queue = set()
 
 def log_error(file, message):
@@ -117,43 +117,39 @@ def transcode(input_file, export_path, handbrake_exe, target_bitrate=None, prese
 def traverse(root_dir, filter_bitrate, target_bitrate, export_path, handbrake_exe, mediainfo_exe, subfolder_regex, depth=0):
     supported_extensions = [".mp4", ".mkv", ".avi", ".mpg", ".ts", ".mxf", ".gxf", ".lxf", ".wmv", ".flv", ".mov", ".mp3"]
     print(f"Traversing {root_dir}...")
-    global traversed_files
+    global traversed_directories
     global transcode_queue
     root_dir = os.path.normpath(root_dir)
     if not os.path.isdir(root_dir):
         print(f"Error: {root_dir} is not a valid directory.")
         sys.exit(1)
-    if traversed_files is None:
-        traversed_files = set()
-    for file in os.listdir(root_dir):
-        if file.startswith('.'):
+    if traversed_directories is None:
+        traversed_directories = set()
+    full_path = os.path.abspath(root_dir)
+    if full_path in traversed_directories:
+        return
+    for item in os.listdir(full_path):
+        if item.startswith('.'):
             continue
-        if os.path.isfile(os.path.join(root_dir, file)):
-            ext = os.path.splitext(file)[1]
+        item_path = os.path.join(full_path, item)
+        if os.path.isdir(item_path):
+            if depth > 0 or subfolder_regex is None or re.match(subfolder_regex, item):
+                yield from traverse(item_path, filter_bitrate, target_bitrate, export_path, handbrake_exe, mediainfo_exe, subfolder_regex, depth=depth+1)
+        elif os.path.isfile(item_path):
+            ext = os.path.splitext(item)[1]
             if ext.lower() not in supported_extensions:
                 continue
-            path = os.path.join(root_dir, file)
-            if path in traversed_files:
-                #print(f"{path} already traversed, skipping")
-                continue
-            traversed_files.add(path)
-            #print(f"{path} added to traversed_files")
-            #print(traversed_files)
-            bitrate = get_bitrate(path, mediainfo_exe)
+            bitrate = get_bitrate(item_path, mediainfo_exe)
             if bitrate is not None and bitrate > filter_bitrate * 1000000:
-                size = os.path.getsize(path) / (1024 * 1024)
-                duration = subprocess.check_output([mediainfo_exe, '--Inform=General;%Duration%', path], encoding='utf-8')
+                size = os.path.getsize(item_path) / (1024 * 1024)
+                duration = subprocess.check_output([mediainfo_exe, '--Inform=General;%Duration%', item_path], encoding='utf-8')
                 duration_seconds = int(duration.strip()) / 1000
                 duration_minutes, duration_seconds = divmod(duration_seconds, 60)
                 duration_hours, duration_minutes = divmod(duration_minutes, 60)
-                print(f"{file} ({duration_hours:.0f}h {duration_minutes:.0f}m {duration_seconds:.0f}s, {size:.2f}MB, {bitrate/1000000:.2f} Mbps)", end='')
-                transcode_queue.add(path)
-                yield (path, bitrate)
-        elif os.path.isdir(os.path.join(root_dir, file)):
-            if depth > 0 or subfolder_regex is None or re.match(subfolder_regex, file):
-                subfolder = os.path.join(root_dir, file)
-                for subfile in traverse(subfolder, filter_bitrate, target_bitrate, export_path, handbrake_exe, mediainfo_exe, subfolder_regex, depth=depth+1):
-                    yield subfile
+                print(f"{item} ({duration_hours:.0f}h {duration_minutes:.0f}m {duration_seconds:.0f}s, {size:.2f}MB, {bitrate/1000000:.2f} Mbps)", end='')
+                transcode_queue.add(item_path)
+                yield (item_path, bitrate)
+    traversed_directories.add(full_path)
 
 def save_transcode_queue(files):
     data = {
@@ -163,7 +159,7 @@ def save_transcode_queue(files):
         json.dump(data, file)
 
 def handle_keyboard_interrupt():
-    global traversed_files
+    global traversed_directories
     global transcode_queue
     print("\nInterrupt detected. What would you like to do?")
     print(f"Transcode queue contains {len(transcode_queue)} item(s).")
@@ -173,7 +169,7 @@ def handle_keyboard_interrupt():
     if choice == "1":
         print("Saving progress...")
         data = {
-            "traversed_files": list(traversed_files),
+            "traversed_directories": list(traversed_directories),
             "transcode_queue": list(transcode_queue),
         }
         with open("transcode_queue.json", "w") as file:
@@ -187,7 +183,7 @@ def handle_keyboard_interrupt():
         print("Invalid choice. Please try again.")
         handle_keyboard_interrupt()
 
-def process_transcode_queue(files):
+def process_transcode_queue(files, preconfirm=False):
     if not files:
         print('No files were found.')
         return False
@@ -196,8 +192,12 @@ def process_transcode_queue(files):
     total_bitrate = sum(bitrate for _, bitrate in files)
     average_bitrate = total_bitrate / total_files
 
-    print(f'Found {total_files} file(s) with an average bitrate of {average_bitrate/1000000:.2f} Mbps. Start the transcode queue? ([yes/no/quit/save for later] or [y/n/q/s]) ')
-    confirm = input().lower()
+    if preconfirm:
+        confirm = 'yes'
+    else:
+        print(f'Found {total_files} file(s) with an average bitrate of {average_bitrate/1000000:.2f} Mbps. Start the transcode queue? ([yes/no/quit/save for later] or [y/n/q/s]) ')
+        confirm = input().lower()
+
     if confirm == 'yes' or confirm == 'y':
         print('Starting transcode process')
         return True
@@ -235,18 +235,21 @@ if __name__ == '__main__':
 
     try:
         files = []
-        traversed_files = set()
         transcode_queue = set()
 
         # Check if the transcode_queue.json file exists
         if os.path.exists("transcode_queue.json"):
-
+            print(f"previous run found - restoring...")
             # Load the data from the JSON file
             with open("transcode_queue.json", "r") as file:
                 data = json.load(file)
                 transcode_queue = set(data["transcode_queue"])
-                if traversed_files:
-                    traversed_files = set(data["traversed_files"])
+                if "traversed_directories" in data:
+                    print("found traversed directories")
+                    traversed_directories = set(data["traversed_directories"])
+                else:
+                    print("no traversed directories found")
+                    traversed_directories = set()
 
                 # Check if there are files in the transcode queue
                 if transcode_queue:
@@ -264,7 +267,7 @@ if __name__ == '__main__':
                     # If the user confirms, process the transcode queue and transcode the files
                     if confirm == "yes" or confirm == "y":
                         files = [(path, get_bitrate(path, args.mediainfo_exe)) for path in transcode_queue]
-                        start_transcoding = process_transcode_queue(files)
+                        start_transcoding = process_transcode_queue(files, preconfirm=True)
                         if start_transcoding:
                             for file, _ in files:
                                 transcode(file, args.export_path, args.handbrake_exe, target_bitrate=args.target_bitrate)
@@ -300,19 +303,19 @@ if __name__ == '__main__':
                         else:
                             sys.exit(0)
 
-        # If the transcode_queue.json file does not exist, traverse the import path and process the transcode queue
-        else:
-            for file in traverse(args.import_path, args.filter_bitrate, args.target_bitrate, args.export_path, args.handbrake_exe, args.mediainfo_exe, args.subfolder_regex):
-                files.append(file)
-            start_transcoding = process_transcode_queue(files)
-            if start_transcoding:
-                for file, _ in files:
-                    transcode(file, args.export_path, args.handbrake_exe, target_bitrate=args.target_bitrate)
-                # Print the completion message and remove the transcode_queue.json file
-                print("Transcoding done.")
-                os.remove("transcode_queue.json")
-            else:
-                sys.exit(0)
+                # If the transcode_queue.json file does not exist, traverse the import path and process the transcode queue
+                else:
+                    for file in traverse(args.import_path, args.filter_bitrate, args.target_bitrate, args.export_path, args.handbrake_exe, args.mediainfo_exe, args.subfolder_regex):
+                        files.append(file)
+                    start_transcoding = process_transcode_queue(files)
+                    if start_transcoding:
+                        for file, _ in files:
+                            transcode(file, args.export_path, args.handbrake_exe, target_bitrate=args.target_bitrate)
+                        # Print the completion message and remove the transcode_queue.json file
+                        print("Transcoding done.")
+                        os.remove("transcode_queue.json")
+                    else:
+                        sys.exit(0)
 
         # Use the configuration data from the config.ini file
         with open('config.ini', 'w') as f:
@@ -347,7 +350,7 @@ if __name__ == '__main__':
         output_file = get_output_file(file, args.export_path)
         output_size = os.path.getsize(output_file)
         total_output_size += output_size
-        traversed_files.add(file)
+        traversed_directories.add(file)
     size_difference = total_original_size - total_output_size
     percentage_difference = (size_difference / total_original_size) * 100
 
