@@ -162,31 +162,6 @@ def save_transcode_queue(files):
     with open("transcode_queue.json", "w") as file:
         json.dump(data, file)
 
-def process_transcode_queue(files):
-    if not files:
-        print('No files were found.')
-        return False
-
-    total_files = len(files)
-    total_bitrate = sum(bitrate for _, bitrate in files)
-    average_bitrate = total_bitrate / total_files
-
-    print(f'Found {total_files} file(s) with an average bitrate of {average_bitrate/1000000:.2f} Mbps. Start the transcode queue? ([yes/no/quit/save for later] or [y/n/q/s]) ')
-    confirm = input().lower()
-    if confirm == 'yes' or confirm == 'y':
-        print('Starting transcode process')
-        return True
-    elif confirm == 'save for later' or confirm == 's':
-        save_transcode_queue(files)
-        print('Transcode queue saved for later.')
-        return False
-    elif confirm == 'quit' or confirm == 'q':
-        print('quitting without saving')
-        return False
-    else:
-        print('Aborted.')
-        return False
-
 def handle_keyboard_interrupt():
     global traversed_files
     global transcode_queue
@@ -211,6 +186,31 @@ def handle_keyboard_interrupt():
     else:
         print("Invalid choice. Please try again.")
         handle_keyboard_interrupt()
+
+def process_transcode_queue(files):
+    if not files:
+        print('No files were found.')
+        return False
+
+    total_files = len(files)
+    total_bitrate = sum(bitrate for _, bitrate in files)
+    average_bitrate = total_bitrate / total_files
+
+    print(f'Found {total_files} file(s) with an average bitrate of {average_bitrate/1000000:.2f} Mbps. Start the transcode queue? ([yes/no/quit/save for later] or [y/n/q/s]) ')
+    confirm = input().lower()
+    if confirm == 'yes' or confirm == 'y':
+        print('Starting transcode process')
+        return True
+    elif confirm == 'save for later' or confirm == 's':
+        save_transcode_queue(files)
+        print('Transcode queue saved for later.')
+        return False
+    elif confirm == 'quit' or confirm == 'q':
+        print('quitting without saving')
+        return False
+    else:
+        print('Aborted.')
+        return False
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Transcode videos with a bitrate greater than the specified threshold.', add_help=False)
@@ -287,23 +287,9 @@ if __name__ == '__main__':
                         sys.exit(0)
                     # If the user does not confirm, traverse the import path and process the transcode queue
                     else:
+                        print("Restoring list of traversed files...")
                         for file in traverse(args.import_path, args.filter_bitrate, args.target_bitrate, args.export_path, args.handbrake_exe, args.mediainfo_exe, args.subfolder_regex):
                             files.append(file)
-                        start_transcoding = process_transcode_queue(files)
-                        if start_transcoding:
-                            for file, _ in files:
-                                transcode(file, args.export_path, args.handbrake_exe, target_bitrate=args.target_bitrate)
-                            # Print the completion message and remove the transcode_queue.json file
-                            print("Transcoding done.")
-                            os.remove("transcode_queue.json")
-                        else:
-                            sys.exit(0)
-
-                # If there are no files in the transcode queue, restore the list of traversed files and process the transcode queue
-                else:
-                    print("Restoring list of traversed files...")
-                    for file in traverse(args.import_path, args.filter_bitrate, args.target_bitrate, args.export_path, args.handbrake_exe, args.mediainfo_exe, args.subfolder_regex):
-                        files.append(file)
                         start_transcoding = process_transcode_queue(files)
                         if start_transcoding:
                             for file, _ in files:
