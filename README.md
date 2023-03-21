@@ -13,7 +13,6 @@ A Python script that traverses a directory for media files and transcodes them w
 1. Install Python 3.x.
 2. Install HandbrakeCLI and mediainfo.
 3. Clone or download this repository.
-4. (Optional) Place your Handbrake preset file in the same directory as the script.
 
 ## Usage
 
