@@ -1,36 +1,36 @@
 # Transcoderr
-A Python script that traverses a directory for media files and transcodes them with HandbrakeCLI.
+A Python script that traverses a directory for media files and transcodes them with ffmpeg.
 
 ## Requirements
 
 * Python 3.x
-* HandbrakeCLI (download at [https://handbrake.fr/downloads2.php](https://handbrake.fr/downloads2.php))
-* mediainfo (download at [https://mediaarea.net/en/MediaInfo/Download](https://mediaarea.net/en/MediaInfo/Download))
-* (Optional) A Handbrake preset file for transcoding
+* ffmpeg
 
 ## Installation
 
 1. Install Python 3.x.
-2. Install HandbrakeCLI and mediainfo.
+2. Install ffmpeg.
 3. Clone or download this repository.
 
 ## Usage
 
 Run the script by opening a terminal or command prompt and typing:
 ```
-python transcoder.py --import "path/to/import" --export "path/to/export"
+python transcoderr.py "path/to/import" --export "path/to/export"
 ```
 
 ### Arguments
 
-* `--import` / `-i` - Required. Path to directory containing media files that need to be transcoded.
-* `--export` / `-e` - Required. Path to directory where transcoded files will be saved.
-* `--handbrake_exe` / `-h` - Optional. Path to HandbrakeCLI executable. Default is `HandBrakeCLI.exe` on Windows, and `HandBrakeCLI` on Linux and macOS.
-* `--mediainfo_exe` / `-m` - Optional. Path to mediainfo executable. Default is `mediainfo` on Linux and macOS, and `mediainfo.exe` on Windows.
-* `--filter_bitrate` / `-f` - Optional. Minimum bitrate in Mbps. Media files with a bitrate below this will be skipped. Default is `0`.
-* `--target_bitrate` / `-t` - Optional. Target bitrate in Mbps. Media files will be transcoded to this bitrate if a preset file is not specified. Default is `10`.
-* `--preset` / `-p` - Optional. Path to Handbrake preset file. If specified, the target bitrate will be ignored.
-* `--subfolder_regex` / `-s` - Optional. Regular expression for subfolder name(s) to include in the search. Default is `.*`, which includes all subfolders.
+* `import_path` - Required. Path to directory containing media files that need to be transcoded.
+* `--export` / `-e` - Optional. Path to directory where transcoded files will be saved. Default is the current working directory.
+* `--filter-bitrate` / `-f` - Optional. Minimum bitrate in Mbps. Media files with a bitrate below this will be skipped. Default is `10`.
+* `--target-bitrate` / `-t` - Optional. Target bitrate in Mbps. Media files will be transcoded to this bitrate. Default is `5`.
+* `--flatten` / `-F` - Optional. Transcoded files will be placed in the export directory without creating a subfolder structure.
+* `--handbrake-exe` / `-H` - Optional. Path to HandBrakeCLI executable. Default is `HandBrakeCLI.exe`. (This option is not used in the current implementation and may be removed in future updates)
+* `--ffmpeg-exe` / `-m` - Optional. Path to ffmpeg executable. Default is the system's installed ffmpeg executable.
+* `--preset` / `-p` - Optional. Path to HandBrakeCLI preset file. (This option is not used in the current implementation and may be removed in future updates)
+* `--subfolder-regex` / `-s` - Optional. Regular expression for subfolder name(s) to include in the search. Default is not set, which includes all subfolders.
+* `--help` / `-h` - Show the help message and exit.
 
 ## Contributing
 
