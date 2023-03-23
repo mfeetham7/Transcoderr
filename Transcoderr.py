@@ -14,6 +14,7 @@ transcode_queue = set()
 transcoded_files = set()
 transcode_number = 1
 starting_transcode_queue_length = 0
+preset_file = None
 
 def log_error(file, message):
     with open('brokenfiles.txt', 'a') as f:
@@ -81,7 +82,7 @@ def get_output_file(input_file, export_path):
     else: 
         return output_file
 
-def transcode(input_file, export_path, handbrake_exe, target_bitrate=None, preset_file=None):
+def transcode(input_file, export_path, target_bitrate=None):
     output_file = get_output_file(input_file, export_path)
     if output_file == 'null':
         return
@@ -89,6 +90,8 @@ def transcode(input_file, export_path, handbrake_exe, target_bitrate=None, prese
     global transcode_number
     global transcoded_files
     global starting_transcode_queue_length
+    global default_handbrake_exe
+    global preset_file
     if transcode_number == 1:
         starting_transcode_queue_length = len(transcode_queue)
     os.makedirs(output_dir, exist_ok=True)
@@ -104,7 +107,7 @@ def transcode(input_file, export_path, handbrake_exe, target_bitrate=None, prese
 
     print(f'Transcoding "{input_file}" to "{output_file}"...')
     cmd = [
-        handbrake_exe,
+        default_handbrake_exe,
         '-i', input_file,
         '-o', output_file,
         '--all-audio',
@@ -224,6 +227,8 @@ def handle_keyboard_interrupt():
 def process_transcode_queue(preconfirm=False):
     global transcode_queue
     global transcoded_files
+    global default_handbrake_exe
+    global preset_file
     total_bitrate = 0
     if not transcode_queue:
         print('No files were found.')
@@ -252,7 +257,7 @@ def process_transcode_queue(preconfirm=False):
             if output_file == 'null':
                 transcode_queue.remove(file)
             else:
-                transcode(file, output_file, args.handbrake_exe, target_bitrate=args.target_bitrate)
+                transcode(file, output_file, target_bitrate=args.target_bitrate)
         print("Transcoding done.")
         os.remove("transcode_queue.json")
         return True
@@ -328,12 +333,13 @@ if __name__ == '__main__':
     parser.add_argument('-e', '--export-path', type=str, default=os.getcwd(), help='The path to the directory to export transcoded files to. (default: current working directory)')
     parser.add_argument('-t', '--target-bitrate', type=int, default=5, help='The target bitrate for the transcoded files in Mbps. (default: 5)')
     parser.add_argument('-F', '--flatten', action='store_true', help='Transcoded files will be placed in the export directory without creating a subfolder structure.')
-    parser.add_argument('-H', '--handbrake-exe', type=str, default="HandBrakeCLI.exe", help='The path to the HandBrakeCLI executable. (default: "HandBrakeCLI.exe")')
+    parser.add_argument('-H', '--handbrake-exe', type=str, help='The path to the HandBrakeCLI executable. (default: "HandBrakeCLI.exe")')
     parser.add_argument('-m', '--ffmpeg-exe', type=str, default=get_bitrate_executable, help='The path to the ffmpeg executable.')
     parser.add_argument('-h', '--help', action='help', default=argparse.SUPPRESS, help='Show this help message and exit.')
     parser.add_argument('-p', '--preset', type=str, help='The path to the HandBrakeCLI preset file. (overrules other quality arguments)')
     parser.add_argument('-s', '--subfolder-regex', type=str, help='Only process subfolders whose names match this regular expression.')
     args = parser.parse_args()
+    preset_file = args.preset
 
     try:
         if os.path.exists("transcode_queue.json"):
