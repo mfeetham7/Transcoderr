@@ -14,6 +14,9 @@ config = configparser.ConfigParser()
 config.read('config.ini')
 traversed_directories = set()
 transcode_queue = set()
+transcoded_files = set()
+transcode_number = 1
+starting_transcode_queue_length = 0
 
 def log_error(file, message):
     with open('brokenfiles.txt', 'a') as f:
@@ -60,16 +63,22 @@ def get_output_file(input_file, export_path):
 
 def transcode(input_file, export_path, handbrake_exe, target_bitrate=None, preset_file=None):
     output_file = get_output_file(input_file, export_path)
-    # Get the directory path of the output file and create the folder structure if it doesn't exist
     output_dir = os.path.dirname(output_file)
+    global transcode_number
+    global transcoded_files
+    global starting_transcode_queue_length
+    if transcode_number == 1:
+        starting_transcode_queue_length = len(transcode_queue)
     os.makedirs(output_dir, exist_ok=True)
 
     def process_output(output_line):
-        encoding_status_pattern = re.compile(r'Encoding:.*\s(?P<fps>\d+\.\d+)\s(?P<unit>fps)')
+        encoding_status_pattern = re.compile(
+            r'Encoding: task (?P<task_num>\d+) of (?P<total_tasks>\d+), '
+            r'(?P<percent>\d+\.\d+) %.*ETA (?P<eta>\d{2}h\d{2}m\d{2}s)'
+        )
         match = encoding_status_pattern.search(output_line)
         if match:
-            # Print the status
-            print(f"\rEncoding file {input_file}. Average fps: {match.group('fps')} {match.group('unit')}", end='')
+            print(f"\rEncoding Task {match.group('task_num')} of {match.group('total_tasks')}."f"Progress: {match.group('percent')}%, ETA: {match.group('eta')}",end='',flush=True,)
 
     print(f'Transcoding "{input_file}" to "{output_file}"...')
     cmd = [
@@ -86,7 +95,7 @@ def transcode(input_file, export_path, handbrake_exe, target_bitrate=None, prese
         cmd.extend(['--preset-import-file', preset_file])
     else:
         cmd.extend([
-            '--encoder', 'nvenc_h264',  # or '--encoder', 'nvenc_hevc'
+            '--encoder', 'nvenc_h264',
             '-b', str(target_bitrate * 1024),
             '--cfr',
             '--vfr',
@@ -96,29 +105,25 @@ def transcode(input_file, export_path, handbrake_exe, target_bitrate=None, prese
             '--no-grayscale',
             '--custom-anamorphic',
             '--keep-display-aspect',
-            '--preset', 'Very Fast 1080p30',  # or other preset that suits your needs
+            '--preset', 'Very Fast 1080p30',
         ])
-
-    with subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=1, universal_newlines=True) as process:
+    print(f"Transcoding file {transcode_number} of {starting_transcode_queue_length}")
+    with subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, bufsize=1, universal_newlines=True) as process:
         for line in process.stdout:
             process_output(line)
 
-        # Print HandbrakeCLI output and errors
-        print("Handbrake Output:")
-        print(process.stdout.read())
-        print("Handbrake Errors:")
-        print(process.stderr.read())
-
-    # Wait for the process to complete before getting the file size
     process.wait()
     output_size = os.path.getsize(output_file)
-    print("\n")
+    output_size_mb = int(output_size) / (1024 * 1024)
+    print(f"\nFinished encoding {input_file}. Output size: {output_size_mb:.2f} MB")
+    transcode_number = transcode_number + 1
+    transcoded_files.add(input_file)
+    transcode_queue.remove(input_file)
 
 def traverse(root_dir, filter_bitrate, target_bitrate, export_path, handbrake_exe, mediainfo_exe, subfolder_regex, depth=0):
-    supported_extensions = [".mp4", ".mkv", ".avi", ".mpg", ".ts", ".mxf", ".gxf", ".lxf", ".wmv", ".flv", ".mov", ".mp3"]
-
     global traversed_directories
     global transcode_queue
+    supported_extensions = [".mp4", ".mkv", ".avi", ".mpg", ".ts", ".mxf", ".gxf", ".lxf", ".wmv", ".flv", ".mov", ".mp3"]
     root_dir = os.path.normpath(root_dir)
     if not os.path.isdir(root_dir):
         print(f"Error: {root_dir} is not a valid directory.")
@@ -153,76 +158,147 @@ def traverse(root_dir, filter_bitrate, target_bitrate, export_path, handbrake_ex
                 yield (item_path, bitrate)
     traversed_directories.add(full_path)
 
-def save_transcode_queue(files):
+def save_transcode_queue():
+    global traversed_directories
+    global transcoded_files
+    global transcode_queue
+    file_name = 'transcode_queue.json'
+    print("Saving progress...")
     data = {
-        "transcode_queue": [path for path, bitrate in files]
+        "traversed_directories": list(traversed_directories),
+        "transcode_queue": list(transcode_queue),
+        "transcoded_files": list(transcoded_files),
     }
-    with open("transcode_queue.json", "w") as file:
+    with open(file_name, "w+") as file:
         json.dump(data, file)
+    print("Progress saved. Exiting...")
 
 def handle_keyboard_interrupt():
     global traversed_directories
     global transcode_queue
+    global transcoded_files
     try:
-        print("\nInterrupt detected. What would you like to do?")
-        print(f"Transcode queue contains {len(transcode_queue)} item(s).")
-        print("1. Save progress and exit")
-        print("2. Start transcoding now")
+        print(f"\nInterrupt detected. What would you like to do?\nTranscode queue contains {len(transcode_queue)+len(transcoded_files)} item(s).\n1. Save progress and exit\n2. Start transcoding now")
         choice = input("Enter your choice (1 or 2): ")
-        if choice == "1":
-            print("Saving progress...")
-            data = {
-                "traversed_directories": list(traversed_directories),
-                "transcode_queue": list(transcode_queue),
-            }
-            with open("transcode_queue.json", "w") as file:
-                json.dump(data, file)
-            print("Progress saved. Exiting...")
-            sys.exit(0)
-        elif choice == "2":
+        if choice == "2":
             print("Starting transcoding...")
             return
+        elif choice == '1':
+            save_transcode_queue()
+            print()
         else:
             print("Invalid choice. Please try again.")
+            handle_keyboard_interrupt()
     except KeyboardInterrupt:
-            print("Saving progress...")
-            data = {
-                "traversed_directories": list(traversed_directories),
-                "transcode_queue": list(transcode_queue),
-            }
-            with open("transcode_queue.json", "w") as file:
-                json.dump(data, file)
-            print("Progress saved. Exiting...")
+            save_transcode_queue()
             sys.exit(0)
 
-def process_transcode_queue(files, preconfirm=False):
-    if not files:
+def process_transcode_queue(preconfirm=False):
+    global transcode_queue
+    total_bitrate = 0
+    if not transcode_queue:
         print('No files were found.')
         return False
-
-    total_files = len(files)
-    total_bitrate = sum(bitrate for _, bitrate in files)
+    for path in transcode_queue:
+        bitrate = get_bitrate(path, args.mediainfo_exe)
+        print(f"{path} ({bitrate/1000000:.2f} Mbps)")
+        if bitrate is not None:
+            total_bitrate += bitrate
+    total_files = len(transcode_queue)
     average_bitrate = total_bitrate / total_files
-
+    
     if preconfirm:
         confirm = 'yes'
     else:
         print(f'Found {total_files} file(s) with an average bitrate of {average_bitrate/1000000:.2f} Mbps. Start the transcode queue? ([yes/no/quit/save for later] or [y/n/q/s]) ')
         confirm = input().lower()
-
     if confirm == 'yes' or confirm == 'y':
         print('Starting transcode process')
         return True
     elif confirm == 'save for later' or confirm == 's':
-        save_transcode_queue(files)
+        save_transcode_queue()
         print('Transcode queue saved for later.')
         return False
     elif confirm == 'quit' or confirm == 'q':
         print('quitting without saving')
+        sys.exit(0)
+    elif confirm =='n' or confirm =='no':
         return False
     else:
-        print('Aborted.')
-        return False
+        return process_transcode_queue()
+
+def transcode_queue_found():
+    global transcode_queue
+    global traversed_directories
+    global transcoded_files
+    with open("transcode_queue.json", "r") as file:
+        data = json.load(file)
+        transcode_queue = set(data["transcode_queue"])
+        files = [(path, get_bitrate(path, args.mediainfo_exe)) for path in transcode_queue]
+        if "traversed_directories" in data:
+            traversed_directories = set(data["traversed_directories"])
+        else:
+            traversed_directories = set()
+        if "transcoded_files" in data:
+            transcoded_files = set(data["transcoded_files"])
+        else: 
+            transcoded_files = set()
+        if transcode_queue:
+            print("Found files in transcode queue:")
+            total_bitrate=0
+            for path in transcode_queue:
+                bitrate = get_bitrate(path, args.mediainfo_exe)
+                print(f"{path} ({bitrate/1000000:.2f} Mbps)")
+                total_bitrate += bitrate
+            total_files = len(files)
+            average_bitrate = total_bitrate / total_files
+            print(f'Found {total_files} file(s) with an average bitrate of {average_bitrate/1000000:.2f} Mbps. Start the transcode queue? ([yes/no/quit/save for later] or [y/n/q/s]) ')
+            confirm = input().lower()
+            if confirm == "yes" or confirm == "y":
+                for file, _ in files:
+                    transcode(file, args.export_path, args.handbrake_exe, target_bitrate=args.target_bitrate)
+                print("Transcoding done.")
+                os.remove("transcode_queue.json")
+            elif confirm == "q" or confirm == "quit":
+                sys.exit(0)
+            elif confirm == 's' or confirm == 'save for later':
+                save_transcode_queue()
+                sys.exit(0)
+            elif confirm == '':
+                transcode_queue_found
+            else:
+                continue_traversal
+
+def process_complete():
+    total_original_size = 0
+    total_output_size = 0
+    try:    
+        for file in transcoded_files:
+            original_size = os.path.getsize(file)
+            total_original_size += original_size
+            output_file = get_output_file(file, args.export_path)
+            output_size = os.path.getsize(output_file)
+            total_output_size += output_size
+        size_difference = total_original_size - total_output_size
+        percentage_difference = (size_difference / total_original_size) * 100
+        print(f'Done. Total original size: {total_original_size / (1024 * 1024):.2f} MB, total output size: {total_output_size / (1024 * 1024):.2f} MB, size difference: {percentage_difference:.2f}%.')
+    except:
+        print('done')
+        sys.exit(0)
+
+def continue_traversal():
+    global transcode_queue
+    for file in traverse(args.import_path, args.filter_bitrate, args.target_bitrate, args.export_path, args.handbrake_exe, args.mediainfo_exe, args.subfolder_regex):
+        transcode_queue.add(file[0])
+    print("Traversal Complete")
+    start_transcoding = process_transcode_queue()
+    if start_transcoding:
+        for file in transcode_queue:
+            transcode(file, args.export_path, args.handbrake_exe, target_bitrate=args.target_bitrate)
+        print("Transcoding done.")
+        os.remove("transcode_queue.json")
+    else:
+        sys.exit(0)
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Transcode videos with a bitrate greater than the specified threshold.', add_help=False)
@@ -236,7 +312,6 @@ if __name__ == '__main__':
     parser.add_argument('-h', '--help', action='help', default=argparse.SUPPRESS, help='Show this help message and exit.')
     parser.add_argument('-p', '--preset', type=str, help='The path to the HandBrakeCLI preset file. (overrules other quality arguments)')
     parser.add_argument('-s', '--subfolder-regex', type=str, help='Only process subfolders whose names match this regular expression.')
-
     args = parser.parse_args()
     args.filter_bitrate = config.getint('DEFAULT', 'filter_bitrate', fallback=10) if args.filter_bitrate is None else args.filter_bitrate
     args.target_bitrate = config.getint('DEFAULT', 'target_bitrate', fallback=5) if args.target_bitrate is None else args.target_bitrate
@@ -246,128 +321,11 @@ if __name__ == '__main__':
     config['DEFAULT'].update({k: str(v) for k, v in vars(args).items()})
 
     try:
-        files = []
-        transcode_queue = set()
-
-        # Check if the transcode_queue.json file exists
         if os.path.exists("transcode_queue.json"):
             print(f"previous run found - restoring...")
-
-            # Load the data from the JSON file
-            with open("transcode_queue.json", "r") as file:
-                data = json.load(file)
-                transcode_queue = set(data["transcode_queue"])
-                if "traversed_directories" in data:
-                    traversed_directories = set(data["traversed_directories"])
-                else:
-                    traversed_directories = set()
-
-                # Check if there are files in the transcode queue
-                if transcode_queue:
-                    print("Found files in transcode queue:")
-                    for path in transcode_queue:
-                        bitrate = get_bitrate(path, args.mediainfo_exe)
-                        print(f"{path} ({bitrate/1000000:.2f} Mbps)")
-
-                    # Prompt user to transcode files in the queue
-                    print("Do you want to transcode these files now? ([yes/no/quit/save for later] or [y/n/q/s])")
-                    confirm = input().lower()
-
-                    # If the user confirms, process the transcode queue and transcode the files
-                    if confirm == "yes" or confirm == "y":
-                        files = [(path, get_bitrate(path, args.mediainfo_exe)) for path in transcode_queue]
-                        start_transcoding = process_transcode_queue(files, preconfirm=True)
-                        if start_transcoding:
-                            for file, _ in files:
-                                transcode(file, args.export_path, args.handbrake_exe, target_bitrate=args.target_bitrate)
-                                transcode_queue.remove(file)
-
-                            # Print the completion message and remove the transcode_queue.json file
-                            print("Transcoding done.")
-                            os.remove("transcode_queue.json")
-                        else:
-                            sys.exit(0)
-                        for file, _ in files:
-                            transcode(file, args.export_path, args.handbrake_exe, target_bitrate=args.target_bitrate)
-                            transcode_queue.remove(file)
-
-                        # Print the completion message and remove the transcode_queue.json file
-                        print("Transcoding done.")
-                        os.remove("transcode_queue.json")
-                    elif confirm == "q" or confirm == "quit":
-                        sys.exit(0)
-                    elif confirm == "save for later" or confirm == 's':
-                        save_transcode_queue(files)
-                        print('Transcode queue saved for later.')
-                        sys.exit(0)
-                        
-                    # If the user does not confirm, traverse the import path and process the transcode queue
-                    else:
-                        print("Restoring list of traversed files...")
-                        for file in traverse(args.import_path, args.filter_bitrate, args.target_bitrate, args.export_path, args.handbrake_exe, args.mediainfo_exe, args.subfolder_regex):
-                            files.append(file)
-                        start_transcoding = process_transcode_queue(files)
-                        if start_transcoding:
-                            for file, _ in files:
-                                transcode(file, args.export_path, args.handbrake_exe, target_bitrate=args.target_bitrate)
-                                transcode_queue.remove(file)
-
-                            # Print the completion message and remove the transcode_queue.json file
-                            print("Transcoding done.")
-                            os.remove("transcode_queue.json")
-                        else:
-                            sys.exit(0)
-
-        # Use the configuration data from the config.ini file
-        with open('config.ini', 'w') as f:
-            config.write(f)
-
-        #If no transcode_queue.json file exists, still run this code.
-        for file in traverse(args.import_path, args.filter_bitrate, args.target_bitrate, args.export_path, args.handbrake_exe, args.mediainfo_exe, args.subfolder_regex):
-            files.append(file)
-        start_transcoding = process_transcode_queue(files)
-        if start_transcoding:
-            for file, _ in files:
-                transcode(file, args.export_path, args.handbrake_exe, target_bitrate=args.target_bitrate)
-                transcode_queue.remove(file)
-                
-            # Print the completion message and remove the transcode_queue.json file
-            print("Transcoding done.")
-            os.remove("transcode_queue.json")
-        else:
-            sys.exit(0)
-
-    #Handle KeyboardInterrupt to gracefully exit the script
+            transcode_queue_found()
+            print("Continuing Traversal...")
+        continue_traversal()
     except KeyboardInterrupt:
         handle_keyboard_interrupt()
-
-    total_files = len(files)
-    total_bitrate = sum(bitrate for _, bitrate in files)
-    average_bitrate = total_bitrate / total_files
-
-    print(f'Found {total_files} file(s) with an average bitrate of {average_bitrate/1000000:.2f} Mbps. Start the transcode queue? (yes/no) ')
-    confirm = input()
-    if confirm.lower() != 'yes':
-        print('Aborted.')
-        sys.exit(0)
-
-    total_original_size = 0
-    total_output_size = 0
-
-    for file, bitrate in files:
-        original_size = os.path.getsize(file)
-        total_original_size += original_size
-
-        if args.preset:
-            transcode(file, args.export_path, args.handbrake_exe, preset_file=args.preset)
-        else:
-            transcode(file, args.export_path, args.handbrake_exe, target_bitrate=args.target_bitrate)
-
-        output_file = get_output_file(file, args.export_path)
-        output_size = os.path.getsize(output_file)
-        total_output_size += output_size
-    size_difference = total_original_size - total_output_size
-    percentage_difference = (size_difference / total_original_size) * 100
-
-    print(f'Done. Total original size: {total_original_size / (1024 * 1024):.2f} MB, total output size: {total_output_size / (1024 * 1024):.2f} MB, size difference: {percentage_difference:.2f}%.')
-    print('done')
+    process_complete()
