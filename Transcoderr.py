@@ -100,10 +100,10 @@ def get_output_file(input_file, export_path):
     output_file = os.path.join(output_dir, output_filename)
     if os.path.exists(output_file):
         file_size = os.path.getsize(output_file)
-        file_size_mb = file_size / (1024 * 1024)
+        file_size_mb = int(file_size) / (1024 * 1024)
         file_duration = get_duration_ffprobe(output_file)
         if file_size == 0 or file_duration == 0 or file_size == None or file_duration == None:
-            print(f"{CW}Output file {CF}{output_file}{CW} is corrupt (size: {CI}{file_size_mb}{CW}, duration: {CI}{file_duration}{CW}). {CE}Deleting and re-transcoding.{RESET}")
+            print(f"{CW}Output file {CF}{output_file}{CW} is corrupt (size: {CI}{file_size_mb} MB{CW}, duration: {CI}{file_duration}{CW}). {CE}Deleting and re-transcoding.{RESET}")
             os.remove(output_file)
             return output_file
         else:
@@ -269,6 +269,7 @@ def process_transcode_queue(preconfirm=False):
     global transcode_queue
     global default_handbrake_exe
     global preset_file
+    global starting_transcode_queue_length
     total_bitrate = 0
     if not transcode_queue:
         print(f'{CW}No files were found.{RESET}')
@@ -297,6 +298,7 @@ def process_transcode_queue(preconfirm=False):
             o = get_output_file(file, args.export_path)
             if o == 'null':
                 print(f"{CI}Removing {CF}{file}{CI} from transcode queue.{RESET}")
+                starting_transcode_queue_length -= 1
                 transcode_queue.remove(file)
             else:
                 transcode(file, o, target_bitrate=args.target_bitrate)
