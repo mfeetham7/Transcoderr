@@ -14,7 +14,9 @@ transcode_queue = set()
 transcoded_files = set()
 transcode_number = 1
 starting_transcode_queue_length = 0
+number_of_skipped_items = 0
 preset_file = None
+skip_all = False
 
 #ANSI Escape Characters
 BOLD = "\033[1m"
@@ -59,7 +61,8 @@ def get_duration_ffprobe(file, ffprobe_exe='ffprobe'):
         else:
             return None
     except Exception as e:
-        print(f"{CW}Error getting duration for file {CF}{file}{CW}: {e}{RESET}")
+        f = str(e) + ' Deleting and re-transcoding...\n'
+        log_error(file, f)
         return None
 
 def get_bitrate(file):
@@ -92,6 +95,8 @@ def get_bitrate(file):
 
 def get_output_file(input_file, export_path):
     global transcode_number
+    global number_of_skipped_items
+    global skip_all
     base_dir = args.import_path
     input_dir = os.path.dirname(input_file)
     input_filename = os.path.splitext(os.path.basename(input_file))[0]
@@ -103,12 +108,15 @@ def get_output_file(input_file, export_path):
         file_size_mb = int(file_size) / (1024 * 1024)
         file_duration = get_duration_ffprobe(output_file)
         if file_size == 0 or file_duration == 0 or file_size == None or file_duration == None:
-            print(f"{CW}Output file {CF}{output_file}{CW} is corrupt (size: {CI}{file_size_mb} MB{CW}, duration: {CI}{file_duration}{CW}). {CE}Deleting and re-transcoding.{RESET}")
+            print(f"{CW}Output file {CF}{output_file}{CW} is corrupt (size: {CI}{file_size_mb:.2f} MB{CW}, duration: {CI}{file_duration}{CW}). {CE}Deleting and re-transcoding.{RESET}")
             os.remove(output_file)
             return output_file
         else:
-            print(f"{CF}{output_file}{CW} already exists. Do you want to overwrite that? {C2}y{CW}es, {C2}n{CW}o, {C2}s{CW}kip{RESET}")
-            confirm = input().lower()
+            if skip_all == True:
+                confirm = 'yes'
+            else:
+                print(f"{CF}{output_file}{CW} already exists.\nDo you want to overwrite that? {C2}y{CW}es, {C2}n{CW}o, {C2}s{CW}kip{RESET}")
+                confirm = input().lower()
             if confirm == 'overwrite' or confirm == 'y' or confirm == 'yes':
                 return output_file
             elif confirm == 'n' or confirm == 'no':
@@ -116,6 +124,11 @@ def get_output_file(input_file, export_path):
                 output_file = f"{file_root}_transcoded{file_ext}"
                 return output_file
             elif confirm == 'skip' or confirm == 's':
+                return 'null'
+            elif confirm == 'skip all':
+                skip_all = True
+                print(f"\n{CW}Skipping existing file{RESET}")
+                number_of_skipped_items += 1
                 return 'null'
             else:
                 return get_output_file(input_file, export_path)
@@ -143,7 +156,7 @@ def transcode(input_file, export_path, target_bitrate=None):
         match = encoding_status_pattern.search(output_line)
         if match:
             print(f"\r{C1}Encoding Task {match.group('task_num')} of {match.group('total_tasks')}."f"Progress: {match.group('percent')}%, ETA: {match.group('eta')}{RESET}",end='',flush=True,)
-    print(f'{C2}Transcoding{RESET}: {CF}{input_file}{C2} to {CF}{export_path}{C2}...{RESET}')
+    print(f'{C2}Transcoding{RESET}: {CF}{input_file}{C2}\nto{RESET}: {CF}{export_path}{C2}...{RESET}')
     cmd = [
         default_handbrake_exe,
         '-i', input_file,
@@ -181,7 +194,7 @@ def transcode(input_file, export_path, target_bitrate=None):
     input_size_mb = int(input_size) / (1024 * 1024)
     size_difference = input_size - output_size
     percentage_difference = (size_difference / input_size) * 100
-    print(f"{C1}\nFinished encoding {CF}{input_filename}{C3}. Input size: {CI}{input_size_mb} MB, {C3}Output size: {CI}{output_size_mb:.2f} MB, {C3}size difference: {CI}{percentage_difference:.2f}%.{RESET}")
+    print(f"{C1}{BOLD}\nFinished encoding {CF}{input_filename}{C3}\nInput size: {CI}{input_size_mb:.2f} MB\n{C3}Output size: {CI}{output_size_mb:.2f} MB\n{C3}size difference: {CI}{percentage_difference:.2f}%.{RESET}")
     transcode_number = transcode_number + 1
     transcoded_files.add(input_file)
     transcode_queue.remove(input_file)
@@ -243,10 +256,11 @@ def save_transcode_queue():
 
 def handle_keyboard_interrupt():
     global traversed_directories
+    global number_of_skipped_items
     global transcode_queue
     try:
-        print(f"{CW}\nInterrupt detected. What would you like to do?\nTranscode queue contains{CI} {len(transcode_queue)+len(transcoded_files)}{CW} item(s).\n({CI}{len(transcoded_files)}{CW} files already transcoded).\n1. Save progress and exit\n2. Start transcoding now{RESET}")
-        choice = input("Enter your choice (1 or 2):\n(or 'delete' to reset queues) ")
+        print(f"{CW}\nInterrupt detected. What would you like to do?\nTranscode queue contains{CI} {len(transcode_queue)+len(transcoded_files)}{CW} item(s).\n({CI}{len(transcoded_files)-number_of_skipped_items}{CW} files already transcoded).\n({CI}{number_of_skipped_items}{CW} file(s) skipped).\n1. Save progress and exit\n2. Start transcoding now{RESET}")
+        choice = input(f"{CI}Enter your choice (1 or 2):\n(or 'delete' to reset queues){RESET}")
         if choice == "2":
             print(f"{C1}Starting transcoding...{RESET}")
             process_transcode_queue(preconfirm = True)
@@ -255,9 +269,13 @@ def handle_keyboard_interrupt():
             save_transcode_queue()
             print()
         elif choice == 'delete':
-            os.remove("transcode_queue.json")
-            print(f"{CW}Queue has been deleted{RESET}")
-            sys.exit(0)
+            if os.path.exists("transcode_queue.json"):    
+                os.remove("transcode_queue.json")
+                print(f"{CW}Queue has been deleted{RESET}")
+                sys.exit(0)
+            else:
+                print(f"{CW}No Queue found. Exiting...{RESET}")
+                sys.exit(0)
         else:
             print(f"{CE}Invalid choice. Please try again.{RESET}")
             handle_keyboard_interrupt()
@@ -303,7 +321,8 @@ def process_transcode_queue(preconfirm=False):
             else:
                 transcode(file, o, target_bitrate=args.target_bitrate)
         print(f"{C1}Transcoding done.{RESET}")
-        os.remove("transcode_queue.json")
+        if os.path.exists("transcode_queue.json"):
+            os.remove("transcode_queue.json")
         return process_complete()
     elif confirm == 'save' or confirm == 's':
         save_transcode_queue()
@@ -356,7 +375,7 @@ def process_complete():
             total_output_size += output_size
         size_difference = total_original_size - total_output_size
         percentage_difference = (size_difference / total_original_size) * 100
-        print(f'{C1}Done. Total original size: {total_original_size / (1024 * 1024):.2f} MB, total output size: {total_output_size / (1024 * 1024):.2f} MB, size difference: {percentage_difference:.2f}%.{RESET}')
+        print(f'{C1}Done. Total original size: {total_original_size / (1024 * 1024):.2f} MB, total output size: {total_output_size / (1024 * 1024):.2f} MB, Pecentage decreased by: {percentage_difference:.2f}%.{RESET}')
         sys.exit(0)
     except:
         print(f'{C1}done{RESET}')
@@ -402,7 +421,8 @@ if __name__ == '__main__':
             print(f"{C2}previous run found - restoring...{RESET}")
             transcode_queue_found()
             print(f"{C2}Continuing Traversal...{RESET}")
-        continue_traversal()
+        else:
+            continue_traversal()
     except KeyboardInterrupt:
         handle_keyboard_interrupt()
 else:
